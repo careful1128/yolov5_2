@@ -107,23 +107,24 @@ def replicate(im, labels):
 
 
 def letterbox(im, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleFill=False, scaleup=True, stride=32):
+
     # Resize and pad image while meeting stride-multiple constraints
     shape = im.shape[:2]  # current shape [height, width]
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
 
     # Scale ratio (new / old)
-    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
-    if not scaleup:  # only scale down, do not scale up (for better val mAP)
-        r = min(r, 1.0)
+    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])   # 原始图像比目标图像大的时候r的值小于1
+    if not scaleup:  # only scale down, do not scale up (for better val mAP)   scaleup 重置参数为1
+        r = min(r, 1.0)   #  缩放比例最大为1，也就是不支持小图像变大图像
 
     # Compute padding
-    ratio = r, r  # width, height ratios
-    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
-    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
-    if auto:  # minimum rectangle
-        dw, dh = np.mod(dw, stride), np.mod(dh, stride)  # wh padding
-    elif scaleFill:  # stretch
+    ratio = r, r  # width, height ratios  宽度高度的缩放比列
+    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))  #  得到等比例缩放后的高度和宽度
+    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding  计算得到宽度和高度的填充大小
+    if auto:  # minimum rectangle   是否做一个自适应
+        dw, dh = np.mod(dw, stride), np.mod(dh, stride)  # wh padding  对填充值取模
+    elif scaleFill:  # stretch   不等比列缩放
         dw, dh = 0.0, 0.0
         new_unpad = (new_shape[1], new_shape[0])
         ratio = new_shape[1] / shape[1], new_shape[0] / shape[0]  # width, height ratios
@@ -135,14 +136,14 @@ def letterbox(im, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleF
         im = cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
     top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
     left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
-    im = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
+    im = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border  添加边界（填充）
     return im, ratio, (dw, dh)
 
 
-def random_perspective(im,
+def random_perspective(im,  #  基于opencv的一些操作
                        targets=(),
                        segments=(),
-                       degrees=10,
+                       degrees=10,  # 旋转的角度范围
                        translate=.1,
                        scale=.1,
                        shear=10,
@@ -170,26 +171,25 @@ def random_perspective(im,
     # a += random.choice([-180, -90, 0, 90])  # add 90deg rotations to small rotations
     s = random.uniform(1 - scale, 1 + scale)
     # s = 2 ** random.uniform(-scale, scale)
-    R[:2] = cv2.getRotationMatrix2D(angle=a, center=(0, 0), scale=s)
+    R[:2] = cv2.getRotationMatrix2D(angle=a, center=(0, 0), scale=s)  #计算旋转中心  转换矩阵（仿射变换）
 
-    # Shear
+    # Shear  计算剪切的矩阵
     S = np.eye(3)
     S[0, 1] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # x shear (deg)
     S[1, 0] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # y shear (deg)
 
-    # Translation
+    # Translation  转换的操作
     T = np.eye(3)
     T[0, 2] = random.uniform(0.5 - translate, 0.5 + translate) * width  # x translation (pixels)
     T[1, 2] = random.uniform(0.5 - translate, 0.5 + translate) * height  # y translation (pixels)
 
     # Combined rotation matrix
-    M = T @ S @ R @ P @ C  # order of operations (right to left) is IMPORTANT
+    M = T @ S @ R @ P @ C  # order of operations (right to left) is IMPORTANT  矩阵乘法 得到最终的矩阵M
     if (border[0] != 0) or (border[1] != 0) or (M != np.eye(3)).any():  # image changed
         if perspective:
             im = cv2.warpPerspective(im, M, dsize=(width, height), borderValue=(114, 114, 114))
         else:  # affine
-            im = cv2.warpAffine(im, M[:2], dsize=(width, height), borderValue=(114, 114, 114))
-
+            im = cv2.warpAffine(im, M[:2], dsize=(width, height), borderValue=(114, 114, 114))   #映射
     # Visualize
     # import matplotlib.pyplot as plt
     # ax = plt.subplots(1, 2, figsize=(12, 6))[1].ravel()
@@ -227,7 +227,7 @@ def random_perspective(im,
             new[:, [0, 2]] = new[:, [0, 2]].clip(0, width)
             new[:, [1, 3]] = new[:, [1, 3]].clip(0, height)
 
-        # filter candidates
+        # filter candidates  候选框过滤
         i = box_candidates(box1=targets[:, 1:5].T * s, box2=new.T, area_thr=0.01 if use_segments else 0.10)
         targets = targets[i]
         targets[:, 1:5] = new[i]
@@ -288,8 +288,8 @@ def cutout(im, labels, p=0.5):
 
 def mixup(im, labels, im2, labels2):
     # Applies MixUp augmentation https://arxiv.org/pdf/1710.09412.pdf
-    r = np.random.beta(32.0, 32.0)  # mixup ratio, alpha=beta=32.0
-    im = (im * r + im2 * (1 - r)).astype(np.uint8)
+    r = np.random.beta(32.0, 32.0)  # mixup ratio, alpha=beta=32.0  随机产生一个满足beta分布的系数
+    im = (im * r + im2 * (1 - r)).astype(np.uint8)    #
     labels = np.concatenate((labels, labels2), 0)
     return im, labels
 

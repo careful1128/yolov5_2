@@ -118,13 +118,13 @@ class ComputeLoss:
         self.anchors = m.anchors
         self.device = device
 
-    def __call__(self, p, targets):  # predictions, targets
-        lcls = torch.zeros(1, device=self.device)  # class loss
-        lbox = torch.zeros(1, device=self.device)  # box loss
-        lobj = torch.zeros(1, device=self.device)  # object loss
+    def __call__(self, p, targets):  # predictions, targets  中心点坐标
+        lcls = torch.zeros(1, device=self.device)  # class loss  物体类别损失 分类损失(BCEloss)
+        lbox = torch.zeros(1, device=self.device)  # box loss  边框坐标回归损失
+        lobj = torch.zeros(1, device=self.device)  # object loss    背景损失
         tcls, tbox, indices, anchors = self.build_targets(p, targets)  # targets
 
-        # Losses
+        # Losses  计算损失
         for i, pi in enumerate(p):  # layer index, layer predictions
             b, a, gj, gi = indices[i]  # image, anchor, gridy, gridx
             tobj = torch.zeros(pi.shape[:4], dtype=pi.dtype, device=self.device)  # target obj
@@ -175,14 +175,26 @@ class ComputeLoss:
         return (lbox + lobj + lcls) * bs, torch.cat((lbox, lobj, lcls)).detach()
 
     def build_targets(self, p, targets):
+        """
+        na就是每个锚点负责预测的边框数目 默认为3
+        nc就是类别数目,coco数据集默认是80
+        nt就是真实边框的数目
+        Args:
+            p:  list(tensor),list里面每一层的head的决策输出,shape的形状都是[N,na,H,W,nc+1+4]
+            targets: tensor对象,shape为[M,6]M表示当前批次中N个图像里面总共有M个边框
+            0表示边框所示图像,1表示边框内的图像类别,2,3,4,5表示边框在原始图像中的中心点以及宽度高度的百分比:[img,class,x,y,w,h]
+        Returns:
+        """
         # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
-        na, nt = self.na, targets.shape[0]  # number of anchors, targets
+        na, nt = self.na, targets.shape[0]  # number of anchors(每个锚点预测的边框给数目), targets(总的真实边框数目)
         tcls, tbox, indices, anch = [], [], [], []
-        gain = torch.ones(7, device=self.device)  # normalized to gridspace gain
-        ai = torch.arange(na, device=self.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
+        # normalized to gridspace gain 长度为7的普通列表形式的tensor,shape的含义:[img ,class , x ,y, w, h,anchor_box_index]  anchor_box_index表示当前anchor box 是当前单元格的第几个序号
+        gain = torch.ones(7, device=self.device)
+        # same as .repeat_interleave(nt)
+        ai = torch.arange(na, device=self.device).float().view(na, 1).repeat(1, nt)
         targets = torch.cat((targets.repeat(na, 1, 1), ai[..., None]), 2)  # append anchor indices
 
-        g = 0.5  # bias
+        g = 0.5  # bias  偏移值
         off = torch.tensor(
             [
                 [0, 0],
@@ -195,40 +207,42 @@ class ComputeLoss:
             device=self.device).float() * g  # offsets
 
         for i in range(self.nl):
-            anchors, shape = self.anchors[i], p[i].shape
-            gain[2:6] = torch.tensor(shape)[[3, 2, 3, 2]]  # xyxy gain
+            anchors, shape = self.anchors[i], p[i].shape  # 获取得到第i层的anchor的先验框大小以及该层的预测的feature map 大小
+            # 实际上获取的就是feature map的宽度高度宽度高度 xyxy gain   填充当前层的feature map的大小作为框可能选择的中心点以及宽度高度
+            gain[2:6] = torch.tensor(shape)[[3, 2, 3, 2]]
 
             # Match targets to anchors
+            # shape（3，n，7） targets真实边框的x，y，w，h的百分比 * gain  --> 得到就是这个真实边框在当前feature map上中心点坐标以及宽度高度
             t = targets * gain  # shape(3,n,7)
             if nt:
                 # Matches
-                r = t[..., 4:6] / anchors[:, None]  # wh ratio
+                r = t[..., 4:6] / anchors[:, None]  # wh ratio  先获取真实边框的宽度和高度（在当前feature map上），和先验框计算比例
                 j = torch.max(r, 1 / r).max(2)[0] < self.hyp['anchor_t']  # compare
                 # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
-                t = t[j]  # filter
+                t = t[j]  # filter  提取当前这层负责的可能的边框(真实边框 + 先验框的高宽比的类别)
 
                 # Offsets
-                gxy = t[:, 2:4]  # grid xy
-                gxi = gain[[2, 3]] - gxy  # inverse
-                j, k = ((gxy % 1 < g) & (gxy > 1)).T
-                l, m = ((gxi % 1 < g) & (gxi > 1)).T
+                gxy = t[:, 2:4]  # grid xy   获取真实边框中心点坐标
+                gxi = gain[[2, 3]] - gxy  # inverse   坐标反转
+                j, k = ((gxy % 1 < g) & (gxy > 1)).T   # 计算中心点坐标距离单元格的左边界和上边界是否在距离边界0.5的范围内(不在边缘的单元格内<左边和上边>)
+                l, m = ((gxi % 1 < g) & (gxi > 1)).T   # 计算中心点坐标距离单元格的左边界和下边界是否在距离边界0.5的范围内(不在边缘的单元格内<右边和下边>)
                 j = torch.stack((torch.ones_like(j), j, k, l, m))
                 t = t.repeat((5, 1, 1))[j]
-                offsets = (torch.zeros_like(gxy)[None] + off[:, None])[j]
+                offsets = (torch.zeros_like(gxy)[None] + off[:, None])[j]    #
             else:
                 t = targets[0]
                 offsets = 0
 
             # Define
-            bc, gxy, gwh, a = t.chunk(4, 1)  # (image, class), grid xy, grid wh, anchors
+            bc, gxy, gwh, a = t.chunk(4, 1)  # (image, class), grid xy, grid wh, anchors  t.chunk(4, 1) 分割的含义
             a, (b, c) = a.long().view(-1), bc.long().T  # anchors, image, class
-            gij = (gxy - offsets).long()
+            gij = (gxy - offsets).long()    # 计算的是考虑偏移情况下的,真实边框对应单元格的左上角的坐标点
             gi, gj = gij.T  # grid indices
 
             # Append
-            indices.append((b, a, gj.clamp_(0, shape[2] - 1), gi.clamp_(0, shape[3] - 1)))  # image, anchor, grid
-            tbox.append(torch.cat((gxy - gij, gwh), 1))  # box
-            anch.append(anchors[a])  # anchors
+            indices.append((b, a, gj.clamp_(0, shape[2] - 1), gi.clamp_(0, shape[3] - 1)))     # image, anchor, grid
+            tbox.append(torch.cat((gxy - gij, gwh), 1))     # gxy - gij 真实边框对应的中心点坐标 - 真实边框对应单元格左上角的坐标  # box
+            anch.append(anchors[a])  # anchors  # 真实边框对应的先验框的大小
             tcls.append(c)  # class
 
         return tcls, tbox, indices, anch

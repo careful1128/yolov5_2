@@ -90,7 +90,7 @@ def run(
 
     # Load model
     device = select_device(device)
-    model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
+    model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)    # 模型构建  DetectMultiBackend
     stride, names, pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)  # check image size
 
@@ -118,7 +118,7 @@ def run(
         t2 = time_sync()
         dt[0] += t2 - t1
 
-        # Inference
+        # Inference  预测结果
         visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
         pred = model(im, augment=augment, visualize=visualize)
         t3 = time_sync()
@@ -140,7 +140,7 @@ def run(
             else:
                 p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
 
-            p = Path(p)  # to Path
+            p = Path(p)  # to Path   数据保存
             save_path = str(save_dir / p.name)  # im.jpg
             txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # im.txt
             s += '%gx%g ' % im.shape[2:]  # print string
@@ -215,14 +215,14 @@ def run(
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model path(s)')
-    parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob, 0 for webcam')
-    parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='(optional) dataset.yaml path')
-    parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
-    parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
-    parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
-    parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
-    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'runs/train4/exp2/weights/last.pt', help='model path(s)')   # 修改处 权重文件
+    parser.add_argument('--source', type=str, default=ROOT / 'wzry/datasets/images/test/SVID_20210726_111258_1.mp4', help='file/dir/URL/glob, 0 for webcam')  # 修改处 地址
+    parser.add_argument('--data', type=str, default=ROOT / 'wzry/wzry_parameter.yaml', help='(optional) dataset.yaml path') # 修改处 参数文件
+    parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')  # 修改处 高 宽
+    parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')  # 置信度
+    parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')   # 非极大值抑制
+    parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')  # 每个图像的最大边框数目
+    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')  # GPU加速
     parser.add_argument('--view-img', action='store_true', help='show results')
     parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')

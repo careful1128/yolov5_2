@@ -244,6 +244,15 @@ def init_seeds(seed=0, deterministic=False):
 
 
 def intersect_dicts(da, db, exclude=()):
+    """
+    进行字典的数据提取
+    Args:
+        da: 原始的字典
+        db: 希望的字典
+        exclude: 不希望返回的key
+    Returns:从da中返回key不在exclude里面（只要部分字符串即可），并且在db里面的，并且shape大小要一致
+
+    """
     # Dictionary intersection of matching keys and shapes, omitting 'exclude' keys, using da values
     return {k: v for k, v in da.items() if k in db and not any(x in k for x in exclude) and v.shape == db[k].shape}
 
@@ -777,7 +786,7 @@ def resample_segments(segments, n=1000):
     return segments
 
 
-def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None):
+def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None):   #  图像还原的操作
     # Rescale coords (xyxy) from img1_shape to img0_shape
     if ratio_pad is None:  # calculate from img0_shape
         gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])  # gain  = old / new
@@ -829,19 +838,19 @@ def non_max_suppression(prediction,
 
     # Settings
     # min_wh = 2  # (pixels) minimum box width and height
-    max_wh = 7680  # (pixels) maximum box width and height
-    max_nms = 30000  # maximum number of boxes into torchvision.ops.nms()
+    max_wh = 7680  # (pixels) maximum box width and height  控制多类别边框要一起做NMS时的偏移值（每个类别的偏移值）
+    max_nms = 30000  # maximum number of boxes into torchvision.ops.nms()   控制进入NMS操作的饿边框数目
     time_limit = 0.3 + 0.03 * bs  # seconds to quit after
     redundant = True  # require redundant detections
     multi_label &= nc > 1  # multiple labels per box (adds 0.5ms/img)
     merge = False  # use merge-NMS
 
-    t = time.time()
+    t = time.time()    #  超时截断操作  （控制耗时的操作 不希望执行的时间太长了）
     output = [torch.zeros((0, 6), device=prediction.device)] * bs
-    for xi, x in enumerate(prediction):  # image index, image inference
+    for xi, x in enumerate(prediction):  # image index, image inference  针对每个图像的预测结果进行处理
         # Apply constraints
         # x[((x[..., 2:4] < min_wh) | (x[..., 2:4] > max_wh)).any(1), 4] = 0  # width-height
-        x = x[xc[xi]]  # confidence
+        x = x[xc[xi]]  # confidence    候选框提取
 
         # Cat apriori labels if autolabelling
         if labels and len(labels[xi]):
@@ -856,18 +865,18 @@ def non_max_suppression(prediction,
         if not x.shape[0]:
             continue
 
-        # Compute conf
+        # Compute conf  计算属于各个类别的概率
         x[:, 5:] *= x[:, 4:5]  # conf = obj_conf * cls_conf
 
         # Box (center x, center y, width, height) to (x1, y1, x2, y2)
-        box = xywh2xyxy(x[:, :4])
+        box = xywh2xyxy(x[:, :4])  # 将中心点 宽度高度 转化成
 
         # Detections matrix nx6 (xyxy, conf, cls)
-        if multi_label:
+        if multi_label:   # 一个边框可能对应多个类别，只要预测概率超过阈值就认为属于该类别
             i, j = (x[:, 5:] > conf_thres).nonzero(as_tuple=False).T
             x = torch.cat((box[i], x[i, j + 5, None], j[:, None].float()), 1)
         else:  # best class only
-            conf, j = x[:, 5:].max(1, keepdim=True)
+            conf, j = x[:, 5:].max(1, keepdim=True)     # 一个box仅属于一个概率最大的类别
             x = torch.cat((box, conf, j.float()), 1)[conf.view(-1) > conf_thres]
 
         # Filter by class
@@ -888,9 +897,9 @@ def non_max_suppression(prediction,
         # Batched NMS
         c = x[:, 5:6] * (0 if agnostic else max_wh)  # classes
         boxes, scores = x[:, :4] + c, x[:, 4]  # boxes (offset by class), scores
-        i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
+        i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS   NMS操作
         if i.shape[0] > max_det:  # limit detections
-            i = i[:max_det]
+            i = i[:max_det]    #  截取最多允许的边框数目返回
         if merge and (1 < n < 3E3):  # Merge NMS (boxes merged using weighted mean)
             # update boxes as boxes(i,4) = weights(i,n) * boxes(n,4)
             iou = box_iou(boxes[i], boxes) > iou_thres  # iou matrix

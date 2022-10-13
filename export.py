@@ -55,6 +55,7 @@ from pathlib import Path
 import pandas as pd
 import torch
 import yaml
+from onnx import shape_inference
 from torch.utils.mobile_optimizer import optimize_for_mobile
 
 FILE = Path(__file__).resolve()
@@ -113,12 +114,12 @@ def export_onnx(model, im, file, opset, train, dynamic, simplify, prefix=colorst
     # YOLOv5 ONNX export
     try:
         check_requirements(('onnx',))
-        import onnx
+        import onnx  # 环境问题
 
-        LOGGER.info(f'\n{prefix} starting export with onnx {onnx.__version__}...')
+        LOGGER.info(f'\n{prefix} starting export with onnx {onnx.__version__}...')  # 日志
         f = file.with_suffix('.onnx')
 
-        torch.onnx.export(
+        torch.onnx.export(   # 转化的核心代码
             model.cpu() if dynamic else model,  # --dynamic only compatible with cpu
             im.cpu() if dynamic else im,
             f,
@@ -147,7 +148,7 @@ def export_onnx(model, im, file, opset, train, dynamic, simplify, prefix=colorst
         for k, v in d.items():
             meta = model_onnx.metadata_props.add()
             meta.key, meta.value = k, str(v)
-        onnx.save(model_onnx, f)
+        onnx.save(shape_inference.infer_shapes(model_onnx), f)   # 此行修改后netron可视化中显示输入输出尺寸
 
         # Simplify
         if simplify:
@@ -494,7 +495,9 @@ def run(
     if half:
         assert device.type != 'cpu' or coreml, '--half only compatible with GPU export, i.e. use --device 0'
         assert not dynamic, '--half not compatible with --dynamic, i.e. use either --half or --dynamic but not both'
-    model = attempt_load(weights, device=device, inplace=True, fuse=True)  # load FP32 model
+    # 基于给定的模型文件进行模型恢复， device给定的设备 ，inplace是否直接在本身对象进行操作， fuse是否量化（是否将卷积和bn合并）
+    model = attempt_load(weights, device=device, inplace=True, fuse=True)  # load FP32 model   将fuse设置为False inplace设置为False model加载
+    # fuse 模型量化/压缩 范畴的   inplace
 
     # Checks
     imgsz *= 2 if len(imgsz) == 1 else 1  # expand
@@ -576,9 +579,9 @@ def run(
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model.pt path(s)')
-    parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640, 640], help='image (h, w)')
-    parser.add_argument('--batch-size', type=int, default=1, help='batch size')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model.pt path(s)')   #  将pytorch 转化成其他结构 onnx 或者pt
+    parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640, 640], help='image (h, w)')   #  大小要固定
+    parser.add_argument('--batch-size', type=int, default=1, help='batch size')   # 批次大小也要固定
     parser.add_argument('--device', default='cpu', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--half', action='store_true', help='FP16 half-precision export')
     parser.add_argument('--inplace', action='store_true', help='set YOLOv5 Detect() inplace=True')
@@ -586,7 +589,7 @@ def parse_opt():
     parser.add_argument('--keras', action='store_true', help='TF: use Keras')
     parser.add_argument('--optimize', action='store_true', help='TorchScript: optimize for mobile')
     parser.add_argument('--int8', action='store_true', help='CoreML/TF INT8 quantization')
-    parser.add_argument('--dynamic', action='store_true', help='ONNX/TF/TensorRT: dynamic axes')
+    parser.add_argument('--dynamic', action='store_true', help='ONNX/TF/TensorRT: dynamic axes')     #  dynamic axes动态类 表示可以修改
     parser.add_argument('--simplify', action='store_true', help='ONNX: simplify model')
     parser.add_argument('--opset', type=int, default=12, help='ONNX: opset version')
     parser.add_argument('--verbose', action='store_true', help='TensorRT: verbose log')

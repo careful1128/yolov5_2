@@ -1,4 +1,4 @@
-# YOLOv5 🚀 by Ultralytics, GPL-3.0 license
+# YOLOv5 🚀 by Ultralytics, GPL-3.0 license  模型恢复
 """
 PyTorch Hub models https://pytorch.org/hub/ultralytics_yolov5/
 
@@ -37,12 +37,13 @@ def _create(name, pretrained=True, channels=3, classes=80, autoshape=True, verbo
 
     if not verbose:
         LOGGER.setLevel(logging.WARNING)
+    # 检查
     check_requirements(exclude=('tensorboard', 'thop', 'opencv-python'))
     name = Path(name)
     path = name.with_suffix('.pt') if name.suffix == '' and not name.is_dir() else name  # checkpoint path
     try:
         device = select_device(device)
-        if pretrained and channels == 3 and classes == 80:
+        if pretrained and channels == 3 and classes == 80:  # 是不是已经训练好的饿coco数据集上的模型
             try:
                 model = DetectMultiBackend(path, device=device, fuse=autoshape)  # detection model
                 if autoshape:
@@ -51,7 +52,7 @@ def _create(name, pretrained=True, channels=3, classes=80, autoshape=True, verbo
                 model = attempt_load(path, device=device, fuse=False)  # arbitrary model
         else:
             cfg = list((Path(__file__).parent / 'models').rglob(f'{path.stem}.yaml'))[0]  # model.yaml path
-            model = Model(cfg, channels, classes)  # create model
+            model = Model(cfg, channels, classes)  # create model  创建目标检测的算法模型
             if pretrained:
                 ckpt = torch.load(attempt_download(path), map_location=device)  # load
                 csd = ckpt['model'].float().state_dict()  # checkpoint state_dict as FP32
@@ -139,7 +140,7 @@ if __name__ == '__main__':
     opt = parser.parse_args()
     print_args(vars(opt))
 
-    # Model
+    # Model  模型恢复的代码
     model = _create(name=opt.model, pretrained=True, channels=3, classes=80, autoshape=True, verbose=True)
     # model = custom(path='path/to/model.pt')  # custom
 

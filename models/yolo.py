@@ -14,6 +14,8 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
+import torch
+
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
@@ -42,21 +44,24 @@ class Detect(nn.Module):
 
     def __init__(self, nc=80, anchors=(), ch=(), inplace=True):  # detection layer
         super().__init__()
-        self.nc = nc  # number of classes
-        self.no = nc + 5  # number of outputs per anchor
-        self.nl = len(anchors)  # number of detection layers
-        self.na = len(anchors[0]) // 2  # number of anchors
-        self.grid = [torch.zeros(1)] * self.nl  # init grid
+        self.nc = nc  # number of classes  物体的类别数目
+        self.no = nc + 5  # number of outputs per anchor   每个anchor的预测输出值的数目 = 类别数目 + 1 + 边框回归系数（n,c,w,h）
+        self.nl = len(anchors)  # number of detection layers   有几层作为预测输出
+        self.na = len(anchors[0]) // 2  # number of anchors   每层预测每个点预测几个anchor box ，默认 3
+        self.grid = [torch.zeros(1)] * self.nl  # init grid   初始单元格
         self.anchor_grid = [torch.zeros(1)] * self.nl  # init anchor grid
         self.register_buffer('anchors', torch.tensor(anchors).float().view(self.nl, -1, 2))  # shape(nl,na,2)
+        # register_buffer：为了解决一下反向更新的时候的问题 注册一个特殊变量，这个变量不会参与反向梯度更新
+        # torch.randn(2,3)  # 创建了一个tensor对象，可以看成是一个常量，反向传播的时候不会更新（register_buffer=False）这个方式认为是常量，所以持久化的时候不会持久化
+        # nn.Parameter(torch.randn(2,3))  # 创建了一个变量，反向更新的时候会更新（register_buffer=True）
         self.m = nn.ModuleList(nn.Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv
         self.inplace = inplace  # use inplace ops (e.g. slice assignment)
 
     def forward(self, x):
         z = []  # inference output
         for i in range(self.nl):
-            x[i] = self.m[i](x[i])  # conv
-            bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
+            x[i] = self.m[i](x[i])  # conv   第i层的卷积
+            bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)   # b  c  h  w
             x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
 
             if not self.training:  # inference
@@ -98,7 +103,7 @@ class BaseModel(nn.Module):
     def _forward_once(self, x, profile=False, visualize=False):
         y, dt = [], []  # outputs
         for m in self.model:
-            if m.f != -1:  # if not from previous layer
+            if m.f != -1:  # if not from previous layer  标注了一下前缀信息
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
@@ -124,10 +129,10 @@ class BaseModel(nn.Module):
     def fuse(self):  # fuse model Conv2d() + BatchNorm2d() layers
         LOGGER.info('Fusing layers... ')
         for m in self.model.modules():
-            if isinstance(m, (Conv, DWConv)) and hasattr(m, 'bn'):
-                m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
-                delattr(m, 'bn')  # remove batchnorm
-                m.forward = m.forward_fuse  # update forward
+            if isinstance(m, (Conv, DWConv)) and hasattr(m, 'bn'):   # fuse 操作 必须包含有bn属性
+                m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv  将conv的参数和bn的参数合并作为新的卷积参数
+                delattr(m, 'bn')  # remove batchnorm  删除bn
+                m.forward = m.forward_fuse  # update forward  下次调用forword方法的时候，实际调用forward_fuse
         self.info()
         return self
 
@@ -137,7 +142,7 @@ class BaseModel(nn.Module):
     def _apply(self, fn):
         # Apply to(), cpu(), cuda(), half() to model tensors that are not parameters or registered buffers
         self = super()._apply(fn)
-        m = self.model[-1]  # Detect()
+        m = self.model[-1]        # Detect()
         if isinstance(m, Detect):
             m.stride = fn(m.stride)
             m.grid = list(map(fn, m.grid))
@@ -162,10 +167,11 @@ class DetectionModel(BaseModel):
         ch = self.yaml['ch'] = self.yaml.get('ch', ch)  # input channels
         if nc and nc != self.yaml['nc']:
             LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
-            self.yaml['nc'] = nc  # override yaml value
+            self.yaml['nc'] = nc  # override yaml value    当模型文件中给定的nc和数据文件里面给定的nc不一致的时候，采用数据的（迁移的目的）
         if anchors:
             LOGGER.info(f'Overriding model.yaml anchors with anchors={anchors}')
             self.yaml['anchors'] = round(anchors)  # override yaml value
+        #模型基于yaml配置文件进行模型的构建
         self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
         self.names = [str(i) for i in range(self.yaml['nc'])]  # default names
         self.inplace = self.yaml.get('inplace', True)
@@ -175,11 +181,12 @@ class DetectionModel(BaseModel):
         if isinstance(m, Detect):
             s = 256  # 2x min stride
             m.inplace = self.inplace
-            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
+            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])
+            # forward  self.forward(torch.zeros(1, ch, s, s)) 用来计算输入的步长大小
             check_anchor_order(m)  # must be in pixel-space (not grid-space)
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
-            self._initialize_biases()  # only run once
+            self._initialize_biases()  # only run once  初始化bias的参数信息
 
         # Init weights, biases
         initialize_weights(self)
@@ -187,20 +194,22 @@ class DetectionModel(BaseModel):
         LOGGER.info('')
 
     def forward(self, x, augment=False, profile=False, visualize=False):
-        if augment:
-            return self._forward_augment(x)  # augmented inference, None
+        if augment:   # 是否做图像增强  默认情况下不做增强 一般情况下仅仅用于预测
+            return self._forward_augment(x)  # augmented inference, None       预测过程中的图像增强
         return self._forward_once(x, profile, visualize)  # single-scale inference, train
 
+
+# 图像缩放的增强  可以提升预测的效果
     def _forward_augment(self, x):
-        img_size = x.shape[-2:]  # height, width
-        s = [1, 0.83, 0.67]  # scales
+        img_size = x.shape[-2:]  # height, width  图像原始大小
+        s = [1, 0.83, 0.67]  # scales  预测过程中的图像缩放比
         f = [None, 3, None]  # flips (2-ud, 3-lr)
-        y = []  # outputs
-        for si, fi in zip(s, f):
-            xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
+        y = []  # outputs  输出结果的临时保存对象
+        for si, fi in zip(s, f):  #  合并遍历
+            xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))   # 图像缩放  gs 表示图像至少要多大
             yi = self._forward_once(xi)[0]  # forward
             # cv2.imwrite(f'img_{si}.jpg', 255 * xi[0].cpu().numpy().transpose((1, 2, 0))[:, :, ::-1])  # save
-            yi = self._descale_pred(yi, fi, si, img_size)
+            yi = self._descale_pred(yi, fi, si, img_size)  # 图像还原成原始大小
             y.append(yi)
         y = self._clip_augmented(y)  # clip augmented tails
         return torch.cat(y, 1), None  # augmented inference, train
@@ -276,26 +285,26 @@ class ClassificationModel(BaseModel):
 def parse_model(d, ch):  # model_dict, input_channels(3)
     LOGGER.info(f"\n{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}")
     anchors, nc, gd, gw = d['anchors'], d['nc'], d['depth_multiple'], d['width_multiple']
-    na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
-    no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
+    na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors  每个点预测几个anchor box
+    no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)  每个点的输出向量维度大小 = （类别数目+4（边框回归的值）+1（背景判断值）*na）
 
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
-    for i, (f, n, m, args) in enumerate(d['backbone'] + d['head']):  # from, number, module, args
+    for i, (f, n, m, args) in enumerate(d['backbone'] + d['head']):  # from（从那一层连接过来）, number（重复次数）, module, args
         m = eval(m) if isinstance(m, str) else m  # eval strings
         for j, a in enumerate(args):
             with contextlib.suppress(NameError):
                 args[j] = eval(a) if isinstance(a, str) else a  # eval strings
 
-        n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
+        n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain  计算操作重复的次数，受参数：depth_multiple的影响
         if m in (Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
                  BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x):
-            c1, c2 = ch[f], args[0]
+            c1, c2 = ch[f], args[0]   #输入的通道数目 输出的通道数目
             if c2 != no:  # if not output
-                c2 = make_divisible(c2 * gw, 8)
+                c2 = make_divisible(c2 * gw, 8)    #针对只要不是最后一层（预测输出层），所有的输出通道数目乘以width_mutiple进行宽度的控制
 
             args = [c1, c2, *args[1:]]
             if m in [BottleneckCSP, C3, C3TR, C3Ghost, C3x]:
-                args.insert(2, n)  # number of repeats
+                args.insert(2, n)  # number of repeats，针对这几个结构模块，将重复次数作为参数传递进去
                 n = 1
         elif m is nn.BatchNorm2d:
             args = [ch[f]]
@@ -312,16 +321,16 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         else:
             c2 = ch[f]
 
-        m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
-        t = str(m)[8:-2].replace('__main__.', '')  # module type
-        np = sum(x.numel() for x in m_.parameters())  # number params
-        m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params
+        m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module（当前层的模块对象构建）
+        t = str(m)[8:-2].replace('__main__.', '')  # module type  模块类型
+        np = sum(x.numel() for x in m_.parameters())  # number params  模块内部的总参数
+        m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params  将必要的饿信息添加的模块中作为属性存在
         LOGGER.info(f'{i:>3}{str(f):>18}{n_:>3}{np:10.0f}  {t:<40}{str(args):<30}')  # print
         save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
         if i == 0:
             ch = []
-        ch.append(c2)
+        ch.append(c2)  #保存每一层的输出通道数目
     return nn.Sequential(*layers), sorted(save)
 
 

@@ -12,30 +12,33 @@ Usage:
     $ python path/to/train.py --data coco128.yaml --weights '' --cfg yolov5s.yaml --img 640  # from scratch
 """
 
-import argparse
+import argparse            # 解析命令行参数模块
+# argparse库是Python自带的一个命令行参数解析库。它可以处理选项参数(optional argument)和位置参数(positional argument)，并能根据参数信息自动生成使用帮助信息
 import gc
-import math
-import os
-import random
-import sys
-import time
-from copy import deepcopy
+import math                # 数学公式模块
+import os                  # 与操作系统进行交互模块 包含文件路径操作和解析
+import random              # 生成随机数模块
+import sys                 # sys系统模块 包含python解释器和它的环境有关的函数
+import time                # 时间模块 更底层
+from copy import deepcopy  # 深度拷贝模块
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path    # pathlib库是文件路径库
+#resolve（）返回一个新的路径，这个新的路径就是当前path对象的绝对路径，如果是软链接则直接被解析
 
-import numpy as np
+import numpy as np      # numpy 数组操作模块
 import torch
-import torch.distributed as dist
-import torch.nn as nn
-import yaml
-from torch.optim import lr_scheduler
-from tqdm import tqdm
+import torch.distributed as dist    # 分布式训练模块
+import torch.nn as nn               # 对torch.nn.functional的类的封装  有很多和torch.nn.functional相同的函数
+import yaml                         # 操作yaml文件模块
+from torch.optim import lr_scheduler     # 学习率模块
+from tqdm import tqdm                    # 进度条模块
 
-FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]  # YOLOv5 root directory
-if str(ROOT) not in sys.path:
+FILE = Path(__file__).resolve()      #获取当前运行脚本文件的绝对路径  F:\github\yolov5_2\train.py
+ROOT = FILE.parents[0]  # YOLOv5 root directory  获取当前运行脚本文件所在文件夹路径    F:\github\yolov5_2
+#将上述文件转化为绝对路径
+if str(ROOT) not in sys.path:   #判断路径是否在查询路径列表中
     sys.path.append(str(ROOT))  # add ROOT to PATH
-ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
+ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative   绝对路径转化为相对路径 os.path.relpath()
 
 import val  # for end-of-epoch mAP
 from models.experimental import attempt_load
@@ -57,6 +60,7 @@ from utils.plots import plot_evolve, plot_labels
 from utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel, select_device, smart_DDP, smart_optimizer,
                                smart_resume, torch_distributed_zero_first)
 
+# os.getenv 该方法，用于全局变量
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
@@ -230,7 +234,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)
             model.half().float()  # pre-reduce anchor precision
 
-        callbacks.run('on_pretrain_routine_end')
+        callbacks.run('on_pretrain_routine_end')     #先验框的计算
 
     # DDP mode
     if cuda and RANK != -1:
@@ -247,18 +251,19 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights
     model.names = names
 
-    # Start training
+    # Start training 开始训练
     t0 = time.time()
     nb = len(train_loader)  # number of batches
+    # number of warmup iterations, max(3 epochs, 100 iterations) 给定前多少个batch的数据进行warmup的操作
     nw = max(round(hyp['warmup_epochs'] * nb), 100)  # number of warmup iterations, max(3 epochs, 100 iterations)
     # nw = min(nw, (epochs - start_epoch) / 2 * nb)  # limit warmup to < 1/2 of training
     last_opt_step = -1
     maps = np.zeros(nc)  # mAP per class
     results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
     scheduler.last_epoch = start_epoch - 1  # do not move
-    scaler = torch.cuda.amp.GradScaler(enabled=amp)
+    scaler = torch.cuda.amp.GradScaler(enabled=amp)     # 337 backward scaler.scale(loss).backward()
     stopper, stop = EarlyStopping(patience=opt.patience), False
-    compute_loss = ComputeLoss(model)  # init loss class
+    compute_loss = ComputeLoss(model)  # init loss class  yolov5中的损失定义
     callbacks.run('on_train_start')
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
                 f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'
@@ -266,13 +271,13 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 f'Starting training for {epochs} epochs...')
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         callbacks.run('on_train_epoch_start')
-        #释放内存和GPU显存
+        #释放内存和GPU显存 主动触发清空内存操作
         gc.collect()
         torch.cuda.empty_cache()
         #设置进入训练阶段
         model.train()
 
-        # Update image weights (optional, single-GPU only)
+        # Update image weights (optional, single-GPU only)  仅支持cpu或者单gpu，基于map的指标进行类别权重更新
         if opt.image_weights:
             cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc  # class weights
             iw = labels_to_image_weights(dataset.labels, nc=nc, class_weights=cw)  # image weights
@@ -282,65 +287,67 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         # b = int(random.uniform(0.25 * imgsz, 0.75 * imgsz + gs) // gs * gs)
         # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
 
-        mloss = torch.zeros(3, device=device)  # mean losses
+        mloss = torch.zeros(3, device=device)  # mean losses 损失对象
         if RANK != -1:
             train_loader.sampler.set_epoch(epoch)
         pbar = enumerate(train_loader)
         LOGGER.info(('\n' + '%10s' * 7) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'labels', 'img_size'))
         if RANK in {-1, 0}:
-            pbar = tqdm(pbar, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
-        optimizer.zero_grad()
+            pbar = tqdm(pbar, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar 构建一个迭代
+        optimizer.zero_grad()  #梯度重置为0
         for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
-            # 释放内存和GPU显存
+            #imgs：[batch_size,3,w,h]
+            callbacks.run('on_train_batch_start')
+            # 释放内存和GPU显存 主动触发清空内存的操作
             gc.collect()
             torch.cuda.empty_cache()   #在每个batch上手动触发调用一下
-            callbacks.run('on_train_batch_start')
-            ni = i + nb * epoch  # number integrated batches (since train start)
-            imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
+            ni = i + nb * epoch  # number integrated batches (since train start)  nb 为总批次的数目    ni 在整个训练过程中属于第几个批次
+            imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0  将imgs的值转化为0-1上的值
 
-            # Warmup
+            # Warmup  学习率的变化方式
             if ni <= nw:
                 xi = [0, nw]  # x interp
                 # compute_loss.gr = np.interp(ni, xi, [0.0, 1.0])  # iou loss ratio (obj_loss = 1.0 or iou)
                 accumulate = max(1, np.interp(ni, xi, [1, nbs / batch_size]).round())
                 for j, x in enumerate(optimizer.param_groups):
                     # bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
+                    #学习率做映射转换
                     x['lr'] = np.interp(ni, xi, [hyp['warmup_bias_lr'] if j == 0 else 0.0, x['initial_lr'] * lf(epoch)])
                     if 'momentum' in x:
-                        x['momentum'] = np.interp(ni, xi, [hyp['warmup_momentum'], hyp['momentum']])
+                        x['momentum'] = np.interp(ni, xi, [hyp['warmup_momentum'], hyp['momentum']])    #动量法的优化训练
 
-            # Multi-scale
+            # Multi-scale  是否支持多尺度的训练
             if opt.multi_scale:
                 sz = random.randrange(imgsz * 0.5, imgsz * 1.5 + gs) // gs * gs  # size
                 sf = sz / max(imgs.shape[2:])  # scale factor
                 if sf != 1:
-                    ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
-                    imgs = nn.functional.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
+                    ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)  gs 最大的缩放比例
+                    imgs = nn.functional.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)  #做差值的操作
 
-            # Forward
+            # Forward  前向过程
             with torch.cuda.amp.autocast(amp):
-                pred = model(imgs)  # forward
-                loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+                pred = model(imgs)  # forward 前向过程 （多个分支的head输出）
+                loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size  计算损失
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
                     loss *= 4.
 
-            # Backward
-            scaler.scale(loss).backward()
+            # Backward  反向求解各个参数的梯度值
+            scaler.scale(loss).backward()    # 264行代码
 
             # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
-            if ni - last_opt_step >= accumulate:
+            if ni - last_opt_step >= accumulate:   #算完一个批次
                 scaler.unscale_(optimizer)  # unscale gradients
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # clip gradients
-                scaler.step(optimizer)  # optimizer.step
-                scaler.update()
-                optimizer.zero_grad()
-                if ema:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # clip gradients  所有参数做一个梯度截断
+                scaler.step(optimizer)  # optimizer.step  参数更新
+                scaler.update()         #  相关参数更新
+                optimizer.zero_grad()    # 梯度重置为0
+                if ema:           # ema是一种平滑的操作
                     ema.update(model)
                 last_opt_step = ni
 
-            # Log
+            # Log  日志打印
             if RANK in {-1, 0}:
                 mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
@@ -360,18 +367,18 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             callbacks.run('on_train_epoch_end', epoch=epoch)
             ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
             final_epoch = (epoch + 1 == epochs) or stopper.possible_stop
-            if not noval or final_epoch:  # Calculate mAP
+            if not noval or final_epoch:  # Calculate mAP  做校验的流程
                 results, maps, _ = val.run(data_dict,
-                                           batch_size=batch_size // WORLD_SIZE * 2,
-                                           imgsz=imgsz,
-                                           half=amp,
-                                           model=ema.ema,
-                                           single_cls=single_cls,
-                                           dataloader=val_loader,
-                                           save_dir=save_dir,
+                                           batch_size=batch_size // WORLD_SIZE * 2,  # 批次大小
+                                           imgsz=imgsz,  # 图像大小
+                                           half=amp,    #  是否做半精度训练
+                                           model=ema.ema,  # 模型
+                                           single_cls=single_cls,   # 单个的类别
+                                           dataloader=val_loader,   # 测试数据
+                                           save_dir=save_dir,     # 数据保存路径
                                            plots=False,
                                            callbacks=callbacks,
-                                           compute_loss=compute_loss)
+                                           compute_loss=compute_loss)    # 计算损失的方法
 
             # Update best mAP
             fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
@@ -383,22 +390,25 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
             # Save model
             if (not nosave) or (final_epoch and not evolve):  # if save
+                #  每个epocj结束后都会保存模型，保存的是一个dict字典对象
                 ckpt = {
-                    'epoch': epoch,
-                    'best_fitness': best_fitness,
-                    'model': deepcopy(de_parallel(model)).half(),
+                    'epoch': epoch,  # 当前批次
+                    'best_fitness': best_fitness,  #最好的评价指标是多少
+                    'model': deepcopy(de_parallel(model)).half(),    # 模型保存
                     'ema': deepcopy(ema.ema).half(),
                     'updates': ema.updates,
-                    'optimizer': optimizer.state_dict(),
+                    'optimizer': optimizer.state_dict(),  # 优化器里面的参数
                     'wandb_id': loggers.wandb.wandb_run.id if loggers.wandb else None,
                     'opt': vars(opt),
                     'date': datetime.now().isoformat()}
 
                 # Save last, best and delete
-                torch.save(ckpt, last)
+                # torch.save底层是pickle的方式，所有任意的对象均可以保存
+                torch.save(ckpt, last)   # 每个epoch 均会执行到当前行代码，保存最近一个epoch的模型
                 if best_fitness == fi:
-                    torch.save(ckpt, best)
+                    torch.save(ckpt, best)   # 保存评估指标最好的模型
                 if opt.save_period > 0 and epoch % opt.save_period == 0:
+                    # 通过save_period决定每隔多少个epoch进行特定epoch版本的保存
                     torch.save(ckpt, w / f'epoch{epoch}.pt')
                 del ckpt
                 callbacks.run('on_model_save', last, epoch, final_epoch, best_fitness, fi)
@@ -443,18 +453,20 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     torch.cuda.empty_cache()
     return results
 
-
+"""
+argparse 是python自带的命令行参数解析包，可以用来方便的读取命令行参数    参数讲解
+"""
 def parse_opt(known=False):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', type=str, default=ROOT / 'yolov5s.pt', help='initial weights path')
-    parser.add_argument('--cfg', type=str, default='', help='model.yaml path')
-    parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
-    parser.add_argument('--hyp', type=str, default=ROOT / 'data/hyps/hyp.scratch-low.yaml', help='hyperparameters path')
-    parser.add_argument('--epochs', type=int, default=3)   #数据轮形的次数由300改为3
-    parser.add_argument('--batch-size', type=int, default=8, help='total batch size for all GPUs, -1 for autobatch')  #出现pip eroor
-    parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='train, val image size (pixels)')
+    parser.add_argument('--weights', type=str, default=ROOT / 'yolov5s.pt', help='initial weights path')  # 修改处 初始权重
+    parser.add_argument('--cfg', type=str, default=ROOT /'wzry/wzyr_model.yaml', help='model.yaml path')      #  修改处 训练模型文件
+    parser.add_argument('--data', type=str, default=ROOT / 'wzry/wzry_parameter.yaml', help='dataset.yaml path')    # 修改处 数据集参数文件
+    parser.add_argument('--hyp', type=str, default=ROOT / 'data/hyps/hyp.scratch-low.yaml', help='hyperparameters path')    # 超参数设置
+    parser.add_argument('--epochs', type=int, default=50)   #数据轮形的次数由300改为3    训练轮数
+    parser.add_argument('--batch-size', type=int, default=8, help='total batch size for all GPUs, -1 for autobatch')  # 修改处 batch size
+    parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='train, val image size (pixels)')    #修改处 图片大小
     parser.add_argument('--rect', action='store_true', help='rectangular training')
-    parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
+    parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')   # 断续训练
     parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')
     parser.add_argument('--noval', action='store_true', help='only validate final epoch')
     parser.add_argument('--noautoanchor', action='store_true', help='disable AutoAnchor')
@@ -463,13 +475,13 @@ def parse_opt(known=False):
     parser.add_argument('--bucket', type=str, default='', help='gsutil bucket')
     parser.add_argument('--cache', type=str, nargs='?', const='ram', help='--cache images in "ram" (default) or "disk"')
     parser.add_argument('--image-weights', action='store_true', help='use weighted image selection for training')
-    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')  # 修改处 选择
     parser.add_argument('--multi-scale', action='store_true', help='vary img-size +/- 50%%')
     parser.add_argument('--single-cls', action='store_true', help='train multi-class data as single-class')
     parser.add_argument('--optimizer', type=str, choices=['SGD', 'Adam', 'AdamW'], default='SGD', help='optimizer')
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--workers', type=int, default=0, help='max dataloader workers (per RANK in DDP mode)')  #修改worker为0
-    parser.add_argument('--project', default=ROOT / 'runs/train3', help='save to project/name')   #项目的输出路径改为train0
+    parser.add_argument('--project', default=ROOT / 'runs/train4', help='save to project/name')   #项目的输出路径改为train0
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--quad', action='store_true', help='quad dataloader')
@@ -490,24 +502,46 @@ def parse_opt(known=False):
     return parser.parse_known_args()[0] if known else parser.parse_args()
 
 
+# Callback是（）：
 def main(opt, callbacks=Callbacks()):
     # Checks
     if RANK in {-1, 0}:
+        #  2.1 打印文件根路径
         print_args(vars(opt))
+        #  2.2 检查github状态
         check_git_status()
+        #  2.3 检查requirements
         check_requirements()
 
-    # Resume
+
+
+    # Resume   继续训练
+    #     resume: 恢复最近的train(被打断的train)
+    #     evolve: 寻找超参数
+    #     check_wandb_resume: 令opt.weights = str(Path(modeldir) / "last.pt")
+    #     如果最近有被打断的train且加载last.pt
+    #     get_latest_run: 找出最近的pt模型文件
+    #     如果最近有被中断的训练，就查找上次的权重并恢复opt记录
+    #     opt.data: coco128.yaml
+    #     对wandb相关代码仅概述或略过
+    #     get_latest_run:
+    #     1.
+    #     glob模块是最简单的模块之一，内容非常少。用它可以查找符合特定规则的文件路径名。跟使用windows下的文件搜索差不多。
+    #     2.
+    #     查找文件只用到三个匹配符：””, “?”, “[]”。””匹配0个或多个字符；”?”匹配单个字符；”[]”匹配指定范围内的字符，如：[0 - 9]
+    #     匹配数字。
+
     if opt.resume and not (check_wandb_resume(opt) or opt.evolve):  # resume from specified or most recent last.pt
         last = Path(check_file(opt.resume) if isinstance(opt.resume, str) else get_latest_run())
-        opt_yaml = last.parent.parent / 'opt.yaml'  # train options yaml
+        opt_yaml = last.parent.parent / 'opt.yaml'  # train options yaml   获取之前运行过程中的参数文件
         opt_data = opt.data  # original dataset
         if opt_yaml.is_file():
             with open(opt_yaml, errors='ignore') as f:
                 d = yaml.safe_load(f)
         else:
             d = torch.load(last, map_location='cpu')['opt']
-        opt = argparse.Namespace(**d)  # replace
+        opt = argparse.Namespace(**d)  # replace  用之前运行保存下来的参数覆盖当前这次的运行
+        # 参数重置 （cfg配置文件设置为空。模型参数路径设置为之前训练好的本地磁盘路径，resume设置为True）
         opt.cfg, opt.weights, opt.resume = '', str(last), True  # reinstate
         if is_url(opt_data):
             opt.data = check_file(opt_data)  # avoid HUB resume auth timeout
@@ -540,7 +574,7 @@ def main(opt, callbacks=Callbacks()):
     if not opt.evolve:
         train(opt.hyp, opt, device, callbacks)
 
-    # Evolve hyperparameters (optional)
+    # Evolve hyperparameters (optional)   校验
     else:
         # Hyperparameter evolution metadata (mutation scale 0-1, lower_limit, upper_limit)
         meta = {
@@ -641,5 +675,5 @@ def run(**kwargs):
 
 
 if __name__ == "__main__":
-    opt = parse_opt()
+    opt = parse_opt()     # parse_opt就是读取命令行运行train.py时所带的参数，并保存为opt返回
     main(opt)

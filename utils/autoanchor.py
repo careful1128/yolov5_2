@@ -28,11 +28,12 @@ def check_anchor_order(m):
 def check_anchors(dataset, model, thr=4.0, imgsz=640):
     # Check anchor fit to data, recompute if necessary
     m = model.module.model[-1] if hasattr(model, 'module') else model.model[-1]  # Detect()
+    #计算真实边框的实际大小（有一定偏差的）
     shapes = imgsz * dataset.shapes / dataset.shapes.max(1, keepdims=True)
     scale = np.random.uniform(0.9, 1.1, size=(shapes.shape[0], 1))  # augment scale
     wh = torch.tensor(np.concatenate([l[:, 3:5] * s for s, l in zip(shapes * scale, dataset.labels)])).float()  # wh
 
-    def metric(k):  # compute metric
+    def metric(k):  # compute metric  重叠情况
         r = wh[:, None] / k[None]
         x = torch.min(r, 1 / r).min(2)[0]  # ratio metric
         best = x.max(1)[0]  # best_x
@@ -41,16 +42,16 @@ def check_anchors(dataset, model, thr=4.0, imgsz=640):
         return bpr, aat
 
     stride = m.stride.to(m.anchors.device).view(-1, 1, 1)  # model strides
-    anchors = m.anchors.clone() * stride  # current anchors
-    bpr, aat = metric(anchors.cpu().view(-1, 2))
+    anchors = m.anchors.clone() * stride  # current anchors  模型中现有的anchor信息 当前模型内部的anchor box的先验大小
+    bpr, aat = metric(anchors.cpu().view(-1, 2))  #计算边框的metric 评估值
     s = f'\n{PREFIX}{aat:.2f} anchors/target, {bpr:.3f} Best Possible Recall (BPR). '
     if bpr > 0.98:  # threshold to recompute
         LOGGER.info(f'{s}Current anchors are a good fit to dataset ✅')
     else:
         LOGGER.info(f'{s}Anchors are a poor fit to dataset ⚠️, attempting to improve...')
-        na = m.anchors.numel() // 2  # number of anchors
+        na = m.anchors.numel() // 2  # number of anchors 计算anchor的数目
         try:
-            anchors = kmean_anchors(dataset, n=na, img_size=imgsz, thr=thr, gen=1000, verbose=False)
+            anchors = kmean_anchors(dataset, n=na, img_size=imgsz, thr=thr, gen=1000, verbose=False) #对dataset做kmeans操作
         except Exception as e:
             LOGGER.info(f'{PREFIX}ERROR: {e}')
         new_bpr = metric(anchors)[0]
@@ -118,7 +119,7 @@ def kmean_anchors(dataset='./data/coco128.yaml', n=9, img_size=640, thr=4.0, gen
 
     # Get label wh
     shapes = img_size * dataset.shapes / dataset.shapes.max(1, keepdims=True)
-    wh0 = np.concatenate([l[:, 3:5] * s for s, l in zip(shapes, dataset.labels)])  # wh
+    wh0 = np.concatenate([l[:, 3:5] * s for s, l in zip(shapes, dataset.labels)])  # wh 计算真实边框的wh
 
     # Filter
     i = (wh0 < 3.0).any(1).sum()
@@ -132,7 +133,7 @@ def kmean_anchors(dataset='./data/coco128.yaml', n=9, img_size=640, thr=4.0, gen
         LOGGER.info(f'{PREFIX}Running kmeans for {n} anchors on {len(wh)} points...')
         assert n <= len(wh)  # apply overdetermined constraint
         s = wh.std(0)  # sigmas for whitening
-        k = kmeans(wh / s, n, iter=30)[0] * s  # points
+        k = kmeans(wh / s, n, iter=30)[0] * s  # points  wh / s标准差接近于1
         assert n == len(k)  # kmeans may return fewer points than requested if wh is insufficient or too similar
     except Exception:
         LOGGER.warning(f'{PREFIX}WARNING: switching strategies from kmeans to random init')

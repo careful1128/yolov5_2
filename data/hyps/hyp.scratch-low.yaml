@@ -10,22 +10,22 @@ weight_decay: 0.0005  # optimizer weight decay 5e-4
 warmup_epochs: 3.0  # warmup epochs (fractions ok)
 warmup_momentum: 0.8  # warmup initial momentum
 warmup_bias_lr: 0.1  # warmup initial bias lr
-box: 0.05  # box loss gain
-cls: 0.5  # cls loss gain
+box: 0.05  # box loss gain    回归损失权重系数
+cls: 0.5  # cls loss gain     分类损失权重系数
 cls_pw: 1.0  # cls BCELoss positive_weight
-obj: 1.0  # obj loss gain (scale with pixels)
+obj: 1.0  # obj loss gain (scale with pixels)   是否有物体的损失权重系数
 obj_pw: 1.0  # obj BCELoss positive_weight
 iou_t: 0.20  # IoU training threshold
-anchor_t: 4.0  # anchor-multiple threshold
+anchor_t: 4.0  # anchor-multiple threshold  进行anchor box 先验框高宽比计算过程中的阈值
 # anchors: 3  # anchors per output layer (0 to ignore)
 fl_gamma: 0.0  # focal loss gamma (efficientDet default gamma=1.5)
 hsv_h: 0.015  # image HSV-Hue augmentation (fraction)
 hsv_s: 0.7  # image HSV-Saturation augmentation (fraction)
 hsv_v: 0.4  # image HSV-Value augmentation (fraction)
-degrees: 0.0  # image rotation (+/- deg)
-translate: 0.1  # image translation (+/- fraction)
-scale: 0.5  # image scale (+/- gain)
-shear: 0.0  # image shear (+/- deg)
+degrees: 0.0  # image rotation (+/- deg)  图像旋转的范围
+translate: 0.1  # image translation (+/- fraction)  图像随机转换的范围
+scale: 0.5  # image scale (+/- gain)  图像缩放的范围
+shear: 0.0  # image shear (+/- deg)   剪切的范围
 perspective: 0.0  # image perspective (+/- fraction), range 0-0.001
 flipud: 0.0  # image flip up-down (probability)
 fliplr: 0.5  # image flip left-right (probability)

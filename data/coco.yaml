@@ -27,7 +27,7 @@ names: ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 't
 
 
 # Download script/URL (optional)
-download: |
+download: |   
   from utils.general import download, Path
 
 

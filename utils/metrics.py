@@ -1,6 +1,6 @@
 # YOLOv5 🚀 by Ultralytics, GPL-3.0 license
 """
-Model validation metrics
+Model validation metrics   计算评估指标
 """
 
 import math
@@ -260,7 +260,7 @@ def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, eps=1e-7
         return iou - (c_area - union) / c_area  # GIoU https://arxiv.org/pdf/1902.09630.pdf
     return iou  # IoU
 
-
+# 计算边框
 def box_area(box):
     # box = xyxy(4,n)
     return (box[2] - box[0]) * (box[3] - box[1])
@@ -286,7 +286,7 @@ def box_iou(box1, box2, eps=1e-7):
     # IoU = inter / (area1 + area2 - inter)
     return inter / (box_area(box1.T)[:, None] + box_area(box2.T) - inter + eps)
 
-
+# 计算各种iou
 def bbox_ioa(box1, box2, eps=1e-7):
     """ Returns the intersection over box2 area given box1, box2. Boxes are x1y1x2y2
     box1:       np.array of shape(4)
@@ -306,9 +306,10 @@ def bbox_ioa(box1, box2, eps=1e-7):
     box2_area = (b2_x2 - b2_x1) * (b2_y2 - b2_y1) + eps
 
     # Intersection over box2 area
-    return inter_area / box2_area
+    return inter_area / box2_area  ###
 
 
+#  结构为高度 宽度
 def wh_iou(wh1, wh2, eps=1e-7):
     # Returns the nxm IoU matrix. wh1 is nx2, wh2 is mx2
     wh1 = wh1[:, None]  # [N,1,2]

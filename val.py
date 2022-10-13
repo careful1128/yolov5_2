@@ -1,4 +1,4 @@
-# YOLOv5 🚀 by Ultralytics, GPL-3.0 license
+# YOLOv5 🚀 by Ultralytics, GPL-3.0 license   评估的操作
 """
 Validate a trained YOLOv5 model accuracy on a custom dataset
 
@@ -125,11 +125,12 @@ def run(
 ):
     # Initialize/load model and set device
     training = model is not None
-    if training:  # called by train.py
+    if training:
+    # called by train.py  给定了参数model，是在train.py这个文件中调用
         device, pt, jit, engine = next(model.parameters()).device, True, False, False  # get model device, PyTorch model
         half &= device.type != 'cpu'  # half precision only supported on CUDA
         model.half() if half else model.float()
-    else:  # called directly
+    else:  # called directly   直接调用
         device = select_device(device, batch_size=batch_size)
 
         # Directories
@@ -139,7 +140,7 @@ def run(
         # Load model
         model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
         stride, pt, jit, engine = model.stride, model.pt, model.jit, model.engine
-        imgsz = check_img_size(imgsz, s=stride)  # check image size
+        imgsz = check_img_size(imgsz, s=stride)  # check image size   图像的输入大小必须时最大缩放比的倍数
         half = model.fp16  # FP16 supported on limited backends with CUDA
         if engine:
             batch_size = model.batch_size
@@ -153,14 +154,14 @@ def run(
         data = check_dataset(data)  # check
 
     # Configure
-    model.eval()
+    model.eval()   #  设置模型为评测模式
     cuda = device.type != 'cpu'
     is_coco = isinstance(data.get('val'), str) and data['val'].endswith(f'coco{os.sep}val2017.txt')  # COCO dataset
     nc = 1 if single_cls else int(data['nc'])  # number of classes
     iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
 
-    # Dataloader
+    # Dataloader  数据集的加载
     if not training:
         if pt and not single_cls:  # check --weights are trained on --data
             ncm = model.model.nc
@@ -181,7 +182,7 @@ def run(
                                        prefix=colorstr(f'{task}: '))[0]
 
     seen = 0
-    confusion_matrix = ConfusionMatrix(nc=nc)
+    confusion_matrix = ConfusionMatrix(nc=nc)  #  混淆矩阵
     names = dict(enumerate(model.names if hasattr(model, 'names') else model.module.names))
     class_map = coco80_to_coco91_class() if is_coco else list(range(1000))
     s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P', 'R', 'mAP@.5', 'mAP@.5:.95')
@@ -206,20 +207,20 @@ def run(
         out, train_out = model(im) if training else model(im, augment=augment, val=True)  # inference, loss outputs
         dt[1] += time_sync() - t2
 
-        # Loss
+        # Loss  和训练一样计算损失
         if compute_loss:
             loss += compute_loss([x.float() for x in train_out], targets)[1]  # box, obj, cls
 
-        # NMS
+        # NMS  选择最终输出边框
         targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels
         lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
         t3 = time_sync()
         out = non_max_suppression(out, conf_thres, iou_thres, labels=lb, multi_label=True, agnostic=single_cls)
         dt[2] += time_sync() - t3
 
-        # Metrics
+        # Metrics  基于最终的预测边框开始计算评估指标
         for si, pred in enumerate(out):
-            labels = targets[targets[:, 0] == si, 1:]
+            labels = targets[targets[:, 0] == si, 1:]   #  实际的边框信息
             nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
             path, shape = Path(paths[si]), shapes[si][0]
             correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
@@ -240,7 +241,7 @@ def run(
 
             # Evaluate
             if nl:
-                tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
+                tbox = xywh2xyxy(labels[:, 1:5])  # target boxes  真实边框的坐标
                 scale_coords(im[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
                 labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
                 correct = process_batch(predn, labelsn, iouv)

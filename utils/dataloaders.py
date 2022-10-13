@@ -600,24 +600,25 @@ class LoadImagesAndLabels(Dataset):
         mosaic = self.mosaic and random.random() < hyp['mosaic']
         if mosaic:
             # Load mosaic
-            img, labels = self.load_mosaic(index)
+            img, labels = self.load_mosaic(index)   #图像马赛克操作mosaic
             shapes = None
 
             # MixUp augmentation
-            if random.random() < hyp['mixup']:
-                img, labels = mixup(img, labels, *self.load_mosaic(random.randint(0, self.n - 1)))
+            if random.random() < hyp['mixup']:  #将两张图像融合
+                img, labels = mixup(img, labels, *self.load_mosaic(random.randint(0, self.n - 1)))  #此处做马赛克操作
 
         else:
             # Load image
-            img, (h0, w0), (h, w) = self.load_image(index)
+            img, (h0, w0), (h, w) = self.load_image(index)    #此处不做马赛克操作
 
-            # Letterbox
+            # Letterbox  自己定义的batch_shapes的大小信息    图像大小缩放
             shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
-            img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
+            img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment) #ratio比例
             shapes = (h0, w0), ((h / h0, w / w0), pad)  # for COCO mAP rescaling
 
             labels = self.labels[index].copy()
             if labels.size:  # normalized xywh to pixel xyxy format
+                #做一个转化 将xywhn转化为xyxy （即将坐标点从中心的宽度，高度 转化为左上角坐标右下角坐标）
                 labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
 
             if self.augment:
@@ -629,12 +630,12 @@ class LoadImagesAndLabels(Dataset):
                                                  shear=hyp['shear'],
                                                  perspective=hyp['perspective'])
 
-        nl = len(labels)  # number of labels
+        nl = len(labels)  # number of labels  返回标签的数目
         if nl:
             labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1E-3)
 
         if self.augment:
-            # Albumentations
+            # Albumentations  数据增强
             img, labels = self.albumentations(img, labels)
             nl = len(labels)  # update after albumentations
 
@@ -645,25 +646,27 @@ class LoadImagesAndLabels(Dataset):
             if random.random() < hyp['flipud']:
                 img = np.flipud(img)
                 if nl:
+                    # 因为图像的中心点是百分比的表达形式，所以直接1-X就是映射后的坐标
                     labels[:, 2] = 1 - labels[:, 2]
 
             # Flip left-right
             if random.random() < hyp['fliplr']:
                 img = np.fliplr(img)
                 if nl:
+                    #因为图像的中心点是百分比的表达形式，所以直接1-X就是映射后的坐标
                     labels[:, 1] = 1 - labels[:, 1]
 
             # Cutouts
             # labels = cutout(img, labels, p=0.5)
             # nl = len(labels)  # update after cutout
 
-        labels_out = torch.zeros((nl, 6))
+        labels_out = torch.zeros((nl, 6))  #构建一个输出层
         if nl:
             labels_out[:, 1:] = torch.from_numpy(labels)
 
-        # Convert
+        # Convert 图像转换
         img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
-        img = np.ascontiguousarray(img)
+        img = np.ascontiguousarray(img)  #类型转换
 
         return torch.from_numpy(img), labels_out, self.im_files[index], shapes
 
@@ -691,36 +694,50 @@ class LoadImagesAndLabels(Dataset):
             np.save(f.as_posix(), cv2.imread(self.im_files[i]))
 
     def load_mosaic(self, index):
-        # YOLOv5 4-mosaic loader. Loads 1 image + 3 random images into a 4-image mosaic
+        # YOLOv5 4-mosaic loader. Loads 1 image + 3 random images into a 4-image mosaic  将四个图片拼接在一起（为训练时的主要的数据增强的方式）
         labels4, segments4 = [], []
         s = self.img_size
+        # mosaic的中心点的坐标随机[0.5*s,1.5*s]之间的一个随机值
         yc, xc = (int(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border)  # mosaic center x, y
+        # 当前图像 + 随机三种图像的下标
         indices = [index] + random.choices(self.indices, k=3)  # 3 additional image indices
-        random.shuffle(indices)
+        random.shuffle(indices)  #shuffle打乱
+        # 遍历加载四张图片
         for i, index in enumerate(indices):
-            # Load image
+            # Load image（得到图像以及新图像大小）
             img, _, (h, w) = self.load_image(index)
 
             # place img in img4
             if i == 0:  # top left
+                #  第一张图像放到左上方
+                #  产生一个背景图像（s*2）-->[1280,1280,3],颜色为灰色
                 img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
+                # 基于xc和yc这个中心点，计算坐标信息
+                #  计算的是背景图中的坐标：x1a-->xmin；x2a-->xmax;y1a-->ymin;y2a-->ymax
+                # x1a = max(xc-w,0)--> 随机的中心点-原始图像的宽度，但是不能够越界
                 x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
+                #  原图的坐标范围：x2a - x1a-->是新区域的宽度大小，也就是需要从原始图中截取的范围
                 x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
             elif i == 1:  # top right
+                #  第二张图像放到右上方
                 x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, s * 2), yc
                 x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
             elif i == 2:  # bottom left
+                #  第三张图像放到左下方
                 x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(s * 2, yc + h)
                 x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
             elif i == 3:  # bottom right
+                #  第四张图像放到右下方
                 x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
                 x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
 
+
+            #  将当前图像的粘贴/复制到背景图像中  （最终得到四个随机坐标点
             img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
             padw = x1a - x1b
             padh = y1a - y1b
 
-            # Labels
+            # Labels   标签的合并
             labels, segments = self.labels[index].copy(), self.segments[index].copy()
             if labels.size:
                 labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
@@ -728,13 +745,13 @@ class LoadImagesAndLabels(Dataset):
             labels4.append(labels)
             segments4.extend(segments)
 
-        # Concat/clip labels
+        # Concat/clip labels  边框截取的操作
         labels4 = np.concatenate(labels4, 0)
         for x in (labels4[:, 1:], *segments4):
             np.clip(x, 0, 2 * s, out=x)  # clip when using random_perspective()
         # img4, labels4 = replicate(img4, labels4)  # replicate
 
-        # Augment
+        # Augment  数据增强
         img4, labels4, segments4 = copy_paste(img4, labels4, segments4, p=self.hyp['copy_paste'])
         img4, labels4 = random_perspective(img4,
                                            labels4,
@@ -746,7 +763,7 @@ class LoadImagesAndLabels(Dataset):
                                            perspective=self.hyp['perspective'],
                                            border=self.mosaic_border)  # border to remove
 
-        return img4, labels4
+        return img4, labels4    #将图像返回
 
     def load_mosaic9(self, index):
         # YOLOv5 9-mosaic loader. Loads 1 image + 8 random images into a 9-image mosaic

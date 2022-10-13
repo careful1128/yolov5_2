@@ -37,4 +37,40 @@
         parse_opt：获取运行入参
         main：主入口函数
 
-    调用链路：
+    调用链路： main --> train
+
+五.yolov5模型可视化
+    通过netron进行可视化操作,运行export.py文件即可
+    显然该图没有显示输出输出的尺寸，为此我们修改 export.py 代码，并重新导出onnx，显示为下图。
+        # Checks
+        model_onnx = onnx.load(f)  # load onnx model
+        onnx.checker.check_model(model_onnx)  # check onnx model
+
+        # Metadata
+        d = {'stride': int(max(model.stride)), 'names': model.names}
+        for k, v in d.items():
+            meta = model_onnx.metadata_props.add()
+            meta.key, meta.value = k, str(v)
+        onnx.save(shape_inference.infer_shapes(model_onnx), f)
+六，三个事儿：
+    1.将export.py中模型导出为onnx格式的代码抽出来作为单独的py文件执行看看
+    2.将detect.py中的代码抽取出来：模型恢复的代码，单个图像预测的代码（边框坐标+预测类别+置信度），图像可视化代码
+    （reatapi.py中也是预测代码，但是计算量太大了）
+    3.NMS里面用的是IOU，你实现一个DIOU-NMS
+        实现方式：
+            a.查看nms的实现代码
+                a1.参考ppt自己实现
+                a2.去github搜素一个nms的python实现
+                a3.看Pytorch底层的C++/C实现nms代码
+            b.将nms实现代码里面的IOU计算代码更改为DIOU计算代码即可
+七，yolov5训练自己数据集步骤（迁移了coco数据集上的yolov5的模型参数）：
+    1.用labelImg进行标注
+    2.修改配置文件
+        2.1模型配置文件：models/yolov5s.yaml复制-->wzry/wzry_model.yaml 修改nc（number of classes）
+            在yolov5/models先复制一份yolov5s.yaml至wzry，更名为wzry_model.yaml（意为模型），只将如下的nc修改为训练集种类即可
+        2.2数据配置文件：wzry/wzry_parameter.yaml 修改nc names
+            在yolov5/data/coco128.yaml中先复制一份，粘贴到wzry中，改名为wzry_parameter.yaml（意义为wzry的参数配置）
+            wzry_parameter.yaml文件需要修改的参数是nc与names。nc是标签名个数，names就是标签的名字，王者荣耀的例子中有10个标签，标签名字都如下。
+        2.3超参数配置文件：data/hyps/hyp.scratch-low.yaml
+    3.命令行运行：
+        python train.py --weights ./yolov5s.pt --cfg ./models/yolov5s_flowers.yaml --data ./data/flowers.yaml --hyp data/hypa/hyp.scratch-low.yaml

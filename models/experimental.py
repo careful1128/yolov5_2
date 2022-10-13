@@ -58,30 +58,30 @@ class MixConv2d(nn.Module):
         return self.act(self.bn(torch.cat([m(x) for m in self.m], 1)))
 
 
-class Ensemble(nn.ModuleList):
+class Ensemble(nn.ModuleList):     #  此处特点是在ModuleList中写了一个forward 本来的Modulelist中相当于一个列表
     # Ensemble of models
     def __init__(self):
         super().__init__()
 
     def forward(self, x, augment=False, profile=False, visualize=False):
-        y = [module(x, augment, profile, visualize)[0] for module in self]
+        y = [module(x, augment, profile, visualize)[0] for module in self]   # 对Module中的每一个列表中的模型进行预测
         # y = torch.stack(y).max(0)[0]  # max ensemble
         # y = torch.stack(y).mean(0)  # mean ensemble
-        y = torch.cat(y, 1)  # nms ensemble
+        y = torch.cat(y, 1)  # nms ensemble   然后拼接
         return y, None  # inference, train output
 
 
-def attempt_load(weights, device=None, inplace=True, fuse=True):
+def attempt_load(weights, device=None, inplace=True, fuse=True):   #  weights参数支持列表 允许多个模型同时预测
     # Loads an ensemble of models weights=[a,b,c] or a single model weights=[a] or weights=a
     from models.yolo import Detect, Model
 
-    model = Ensemble()
+    model = Ensemble()    # 核心恢复代码 attempt_load   Ensemble:机器学习中的一种集成算法
     for w in weights if isinstance(weights, list) else [weights]:
-        ckpt = torch.load(attempt_download(w), map_location='cpu')  # load
-        ckpt = (ckpt.get('ema') or ckpt['model']).to(device).float()  # FP32 model
+        ckpt = torch.load(attempt_download(w), map_location='cpu')  #   torch.load -->对应train.py里面的torch.save
+        ckpt = (ckpt.get('ema') or ckpt['model']).to(device).float()  # FP32 model   ckpt为一个字典 转化为模型
         if not hasattr(ckpt, 'stride'):
             ckpt.stride = torch.tensor([32.])  # compatibility update for ResNet etc.
-        model.append(ckpt.fuse().eval() if fuse and hasattr(ckpt, 'fuse') else ckpt.eval())  # model in eval mode
+        model.append(ckpt.fuse().eval() if fuse and hasattr(ckpt, 'fuse') else ckpt.eval())  # model in eval mode fuse（bn和conv的合并）
 
     # Compatibility updates
     for m in model.modules():

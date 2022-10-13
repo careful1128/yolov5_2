@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import requests
+import self as self
 import torch
 import torch.nn as nn
 from PIL import Image
@@ -27,8 +28,8 @@ from utils.plots import Annotator, colors, save_one_box
 from utils.torch_utils import copy_attr, smart_inference_mode, time_sync
 
 
-def autopad(k, p=None):  # kernel, padding
-    # Pad to 'same'
+def autopad(k, p=None):  # kernel, padding  k 卷积核的大小 p 给定的填充大小 当给定为None时 为自适应
+    # Pad to 'same'  当没有给定padding值的之后，基于kernel大小计算padding大小，保证输出feature map 大小不变
     if p is None:
         p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
     return p
@@ -48,19 +49,19 @@ class Conv(nn.Module):
     def forward_fuse(self, x):
         return self.act(self.conv(x))
 
-
+#  深度可分离卷积
 class DWConv(Conv):
-    # Depth-wise convolution class
+    # Depth-wise convolution class  math.gcd 分成几组 若除不尽则返回1
     def __init__(self, c1, c2, k=1, s=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__(c1, c2, k, s, g=math.gcd(c1, c2), act=act)
 
-
+# 分组可分离卷积
 class DWConvTranspose2d(nn.ConvTranspose2d):
     # Depth-wise transpose convolution class
     def __init__(self, c1, c2, k=1, s=1, p1=0, p2=0):  # ch_in, ch_out, kernel, stride, padding, padding_out
         super().__init__(c1, c2, k, s, p1, p2, groups=math.gcd(c1, c2))
 
-
+# self.ma ma attention的操作
 class TransformerLayer(nn.Module):
     # Transformer layer https://arxiv.org/abs/2010.11929 (LayerNorm layers removed for better performance)
     def __init__(self, c, num_heads):
@@ -68,7 +69,7 @@ class TransformerLayer(nn.Module):
         self.q = nn.Linear(c, c, bias=False)
         self.k = nn.Linear(c, c, bias=False)
         self.v = nn.Linear(c, c, bias=False)
-        self.ma = nn.MultiheadAttention(embed_dim=c, num_heads=num_heads)
+        self.ma = nn.MultiheadAttention(embed_dim=c, num_heads=num_heads)  #  attention结构
         self.fc1 = nn.Linear(c, c, bias=False)
         self.fc2 = nn.Linear(c, c, bias=False)
 
@@ -93,23 +94,30 @@ class TransformerBlock(nn.Module):
         if self.conv is not None:
             x = self.conv(x)
         b, _, w, h = x.shape
-        p = x.flatten(2).permute(2, 0, 1)
+        p = x.flatten(2).permute(2, 0, 1)  # permute 反转
         return self.tr(p + self.linear(p)).permute(1, 2, 0).reshape(b, self.c2, w, h)
 
-
+##  残差结构
 class Bottleneck(nn.Module):
     # Standard bottleneck
-    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):
+        # ch_in 输入通道数目, ch_out  输出通道数目, shortcut（是否残差（skip connection））, groups（分组卷积的大小）, expansion（1*1卷积的通道压缩系数）
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c_, c2, 3, 1, g=g)
-        self.add = shortcut and c1 == c2
+        self.cv1 = Conv(c1, c_, 1, 1)   #1*1卷积
+        self.cv2 = Conv(c_, c2, 3, 1, g=g)   #3*3卷积
+        self.add = shortcut and c1 == c2  #是否进行skip connection/shotcut残差合并 ,shortcut的主要目的是将浅层特征和深层特征的融合
 
     def forward(self, x):
-        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+        x1 = self.cv1(x)   #做1*1卷积进行通道融合,压缩 -->为了减少候选卷积的计算量,加强不同通道之间的融合
+        x2 = self.cv2(x1)   #做3*3卷积进行区域通道融合
+        if self.add:
+            return x + x2
+        else:
+            return x2
+        # return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
-
+#  CSP 结构
 class BottleneckCSP(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
@@ -128,7 +136,7 @@ class BottleneckCSP(nn.Module):
         y2 = self.cv2(x)
         return self.cv4(self.act(self.bn(torch.cat((y1, y2), 1))))
 
-
+#  交叉卷积
 class CrossConv(nn.Module):
     # Cross Convolution Downsample
     def __init__(self, c1, c2, k=3, s=1, g=1, e=1.0, shortcut=False):
@@ -143,20 +151,34 @@ class CrossConv(nn.Module):
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
 
+class C32(nn.Module):
+    # CSP bottleneck with yolov5 ppt
+    def __init__(self,c1,c2, n=1, shortcut=True, g=1, e=0.5):
+
+
+        pass
+
 class C3(nn.Module):
-    # CSP Bottleneck with 3 convolutions
+    # CSP Bottleneck with 3 convolutions   yolo结构中csp的重复结构
+    # modify c3  no conv
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c1, c_, 1, 1)
+        self.cv1 = Conv(c1, c_, 1, 1)   #1*1卷积-->将通道数目缩减的过程&分割  通道从c1降到c_
+        self.cv2 = Conv(c1, c_, 1, 1)   #1*1卷积-->将通道数目缩减的过程&分割
         self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
         self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
 
     def forward(self, x):
-        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
 
+        x1 = self.cv2(x)   # 通道分割 [N,C,H,W]--> [N,C1,H,W]
+        x2 = self.cv1(x)   # 通道分割 [N,C,H,W]--> [N,C2,H,W]    c1==c2
+        x2 = self.m(x2)    # 特征的提取融合  [N,C2,H,W]--> [N,C2,H,W]
+        x = torch.cat([x2,x1], dim=1)   # 两个分支/两类不同的通道的数据合并 拼接  [N,C1,H,W] concat [N,C2,H,W] -->[N,C1+C2,H,W]
+        return self.cv3(x)  # 合并的数据(通道的数据合并)
+        # return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
 
+# 以下表示CSP的结构中的残差结构由什么来实现
 class C3x(C3):
     # C3 module with cross-convolutions
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
@@ -188,9 +210,9 @@ class C3Ghost(C3):
         c_ = int(c2 * e)  # hidden channels
         self.m = nn.Sequential(*(GhostBottleneck(c_, c_) for _ in range(n)))
 
-
+# 4个池化
 class SPP(nn.Module):
-    # Spatial Pyramid Pooling (SPP) layer https://arxiv.org/abs/1406.4729
+    # Spatial Pyramid Pooling (SPP) layer https://arxiv.org/abs/1406.4729   空间金字塔结构
     def __init__(self, c1, c2, k=(5, 9, 13)):
         super().__init__()
         c_ = c1 // 2  # hidden channels
@@ -204,7 +226,7 @@ class SPP(nn.Module):
             warnings.simplefilter('ignore')  # suppress torch 1.9.0 max_pool2d() warning
             return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))
 
-
+# 串联池化
 class SPPF(nn.Module):
     # Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 by Glenn Jocher
     def __init__(self, c1, c2, k=5):  # equivalent to SPP(k=(5, 9, 13))
@@ -215,12 +237,13 @@ class SPPF(nn.Module):
         self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
 
     def forward(self, x):
-        x = self.cv1(x)
+        x = self.cv1(x)  # 1*1卷积进行通道特征融合
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')  # suppress torch 1.9.0 max_pool2d() warning
-            y1 = self.m(x)
-            y2 = self.m(y1)
-            return self.cv2(torch.cat((x, y1, y2, self.m(y2)), 1))
+            y1 = self.m(x)     # 做第一个池化
+            y2 = self.m(y1)    # 在第一次池化的基础上做第二次池化
+            y3 = self.m(y2)    # 在第二次池化的基础上做第三次池化
+            return self.cv2(torch.cat((x, y1, y2, y3), 1))
 
 
 class Focus(nn.Module):
@@ -277,7 +300,7 @@ class Contract(nn.Module):
         x = x.permute(0, 3, 5, 1, 2, 4).contiguous()  # x(1,2,2,64,40,40)
         return x.view(b, c * s * s, h // s, w // s)  # x(1,256,40,40)
 
-
+# 扩展
 class Expand(nn.Module):
     # Expand channels into width-height, i.e. x(1,64,80,80) to x(1,16,160,160)
     def __init__(self, gain=2):
@@ -326,11 +349,12 @@ class DetectMultiBackend(nn.Module):
         fp16 &= pt or jit or onnx or engine  # FP16
         stride = 32  # default stride
 
-        if pt:  # PyTorch
+        if pt:  # PyTorch     模型恢复主要代码 pt中  attempt_load
+            # fuse：是否将conv 和bn 合并
             model = attempt_load(weights if isinstance(weights, list) else w, device=device, inplace=True, fuse=fuse)
             stride = max(int(model.stride.max()), 32)  # model stride
             names = model.module.names if hasattr(model, 'module') else model.names  # get class names
-            model.half() if fp16 else model.float()
+            model.half() if fp16 else model.float()  # 是否做半精度
             self.model = model  # explicitly assign for to(), cpu(), cuda(), half()
         elif jit:  # TorchScript
             LOGGER.info(f'Loading {w} for TorchScript inference...')
@@ -632,10 +656,10 @@ class AutoShape(nn.Module):
             y = self.model(x, augment, profile)  # forward
             t.append(time_sync())
 
-            # Post-process
+            # Post-process（对预测结果进行NMS处理）
             y = non_max_suppression(y if self.dmb else y[0],
-                                    self.conf,
-                                    self.iou,
+                                    self.conf,  # 置信度
+                                    self.iou,   # 阈值
                                     self.classes,
                                     self.agnostic,
                                     self.multi_label,

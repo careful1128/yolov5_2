@@ -295,11 +295,12 @@ def model_info(model, verbose=False, imgsz=640):
 
 def scale_img(img, ratio=1.0, same_shape=False, gs=32):  # img(16,3,256,416)
     # Scales img(bs,3,y,x) by ratio constrained to gs-multiple
-    if ratio == 1.0:
+    if ratio == 1.0:   #若缩放比为1.0  则直接返回
         return img
     h, w = img.shape[2:]
-    s = (int(h * ratio), int(w * ratio))  # new size
-    img = F.interpolate(img, size=s, mode='bilinear', align_corners=False)  # resize
+    s = (int(h * ratio), int(w * ratio))  # new size  否则h*缩放比 w*缩放比 得到新的图像大小
+    img = F.interpolate(img, size=s, mode='bilinear', align_corners=False)  # resize  新的图像进行interpolate 双线性插值
+    # interpolate是用于做插值处理的，常见用途是用于上采样(upsampling);当然也是可以做下采样的(downsampling)
     if not same_shape:  # pad/crop img
         h, w = (math.ceil(x * ratio / gs) * gs for x in (h, w))
     return F.pad(img, [0, w - s[1], 0, h - s[0]], value=0.447)  # value = imagenet mean
