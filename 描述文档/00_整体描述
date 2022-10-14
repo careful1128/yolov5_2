@@ -74,3 +74,4 @@
         2.3超参数配置文件：data/hyps/hyp.scratch-low.yaml
     3.命令行运行：
         python train.py --weights ./yolov5s.pt --cfg ./models/yolov5s_flowers.yaml --data ./data/flowers.yaml --hyp data/hypa/hyp.scratch-low.yaml
+        此处注意修改yaml文件的地址
